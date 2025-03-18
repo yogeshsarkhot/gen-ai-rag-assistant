@@ -1,16 +1,22 @@
+<img src="images/Article Logo.png"/>
+
 # Secure, free, and personalized Generative AI RAG assistant on a personal computer
 Traditional public domain generative AI solutions like ChatGPT, Gemini, Copilot, Perplexity and others are based on the information available on free, public domain sites on the internet.
+<img src="images/Current state of traditional public domain generative AI solutions.png"/>
 
 All the above solutions have a common limitation of not having the access proprietary information stored in private and secure documents used by organizations and individuals. This limitation stops them from answering the questions based on the information stored in private, secure and proprietary documents.
 
 Retrieval-augmented generation (RAG) is an in-context learning technique that retrieves relevant information from a large dataset to augment the input context before generating a response or output. This approach aims to improve the accuracy of the generated content by leveraging external sources.
 
 * RAG solution has two steps. The first Indexing step loads, splits, embeds, and stores local documents into a local vector database.
+<img src="images/Indexing.png"/>
 
 * The second Retrieval and Generation step retrieves relevant documents from the local vector database and passes the content in prompt to the local LLM to generate the final answer.
+<img src="images/Retrieval and Generation.png"/>
 
 ## Current state of public domain RAG solutions
 Since the release of ChapGPT in 2022, we have been surrounded by an explosion of generative AI (GenAI) Retrieval-Augmented Generation (RAG) solutions available in the public domain. Most people use sites like Azure AI, AWS Bedrock, Google Cloud Vertex AI, Nvidia DGX Cloud, and others to create content using GenAI RAG solutions.
+<img src="images/Current situation of user consumption of public domain GenAI RAG solutions.png"/>
 
 There are three key challenges with using public domain GenAI sites:
 * Security: Users are at the mercy of the GenAI sites for the security, storage, and usage of the queries and other content posted on these sites. This is critical especially while sharing proprietary knowledge with the public domain sites.
@@ -20,6 +26,7 @@ There are three key challenges with using public domain GenAI sites:
 While most people are aware of these challenges, the risks of exposing personal information and subsequent exploitation are high, especially when there are limited laws and regulations to protect consumers.
 
 So, I decided to build a personalized GenAI RAG solution to run on a personal computer without worrying about data security, and expensive fees. 
+<img src="images/LinkedIn Article Solution Overview.png"/>
 
 ## Secure, free, and personalized Generative AI RAG Solution Overview
 The solution is simple. It is a web application running on a local machine that uses free and open-source LLMs and a free and open-source vector database running on local machine to provide answers to user queries based on local private and proprietary documents.
@@ -28,8 +35,10 @@ The solution is simple. It is a web application running on a local machine that 
 This section describes three steps to complete the setup of the above solution.
 
 1. Install [Python](https://www.python.org) (a free and open source high-level, general-purpose programming language) and install [ChromaDB](https://docs.trychroma.com/docs/overview/introduction) (a free and open source AI application vector database) and other necessary dependencies
-2. Install [Ollama](https://ollama.com) (a free and open source platform to run LLMs on a local machine) and download [Llama](https://www.llama.com) (a free and open source LLM by Meta AI) and [nomic-embed-text](https://www.nomic.ai/blog/posts/nomic-embed-text-v1) (a high-performing open embedding model with a large token context window) on a local machine
-3. Create a local web application using Python to access a local LLM instance
+<img src="images/Python Config.png"/>
+
+3. Install [Ollama](https://ollama.com) (a free and open source platform to run LLMs on a local machine) and download [Llama](https://www.llama.com) (a free and open source LLM by Meta AI) and [nomic-embed-text](https://www.nomic.ai/blog/posts/nomic-embed-text-v1) (a high-performing open embedding model with a large token context window) on a local machine
+4. Create a local web application using Python to access a local LLM instance
 
 ### Step #1: Install Python
 * Download and run the Python Windows installer from the [URL](https://www.python.org/downloads/windows)
@@ -56,6 +65,8 @@ pip install streamlit pandas langchain langchain-community langchain-chroma lang
 streamlit run assistant.py
 ```
 * Access application using the URL http://localhost:8501
+<img src="images/Application screenshot.png"/>
+
 * Test the application by posting query on the content from uploaded documents
 * Test the application by posting query outside of the content from uploaded docyments 
 
