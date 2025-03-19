@@ -57,7 +57,7 @@ ollama pull llama3
 * Install Python libraries (streamlit, pandas, langchain, langchain-community, langchain-chroma, langchain-ollama, PyPDF2, python-docx, and openpyxl) using the following commands.
 ```
 python.exe -m pip install --upgrade pip
-pip install streamlit pandas langchain langchain-community langchain-chroma langchain-ollama PyPDF2 python-docx openpyxl
+pip install streamlit langchain langchain-community langchain-core langchain-chroma langchain-ollama pypdf docx2txt pandas numpy unstructured unstructured-inference python-docx openpyxl
 ```
 * Download Python script named rag_assistant.py in this repo and put it in the newly created folder
 * Run local web application by running the following command on Windows Command Prompt
