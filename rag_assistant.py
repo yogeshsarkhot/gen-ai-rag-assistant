@@ -4,17 +4,25 @@ import pandas as pd
 import shutil
 import time
 import re
+from typing import List, Dict, Any, Tuple
+import numpy as np
 
-from langchain_community.document_loaders import TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
-from langchain_ollama import OllamaLLM
+from langchain_ollama import OllamaEmbeddings, OllamaLLM
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
-from PyPDF2 import PdfReader
-from docx import Document
 from langchain_core.documents import Document as LangChainDocument
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+
+# Use more modern document loaders
+from langchain_community.document_loaders import (
+    TextLoader,
+    PyPDFLoader,
+    Docx2txtLoader,
+    UnstructuredExcelLoader
+)
 
 # Initialize session state
 if "vector_store" not in st.session_state:
@@ -57,58 +65,59 @@ st.title("Local free, secure and personalized Generative AI RAG assistant")
 # File uploader
 uploaded_files = st.file_uploader("Upload files", type=["txt", "pdf", "docx", "xlsx"], accept_multiple_files=True)
 
-def preprocess_text(text):
-    """Normalize text for better embeddings and matching."""
-    text = re.sub(r'\s+', ' ', text)  # Collapse multiple spaces/newlines into single space
-    text = text.strip()  # Remove leading/trailing whitespace
-    return text.lower()  # Convert to lowercase for consistent matching
-
-def process_file(file, file_type):
+def process_file(file):
     """Process a file and return LangChain documents with correct metadata."""
     temp_file = f"temp_file_{file.name}"
     with open(temp_file, "wb") as f:
         f.write(file.getbuffer())
     
     original_filename = file.name
+    file_type = original_filename.split(".")[-1].lower()
     
-    if file_type == "txt":
-        loader = TextLoader(temp_file)
-        documents = loader.load()
+    try:
+        if file_type == "txt":
+            loader = TextLoader(temp_file)
+            documents = loader.load()
+        elif file_type == "pdf":
+            loader = PyPDFLoader(temp_file)
+            documents = loader.load()
+        elif file_type == "docx":
+            loader = Docx2txtLoader(temp_file)
+            documents = loader.load()
+        elif file_type == "xlsx":
+            loader = UnstructuredExcelLoader(temp_file)
+            documents = loader.load()
+        
+        # Enhance metadata
         for doc in documents:
-            doc.page_content = preprocess_text(doc.page_content)
-            doc.metadata = {"source": original_filename}
-    elif file_type == "pdf":
-        reader = PdfReader(temp_file)
-        text = "".join(page.extract_text() + " " for page in reader.pages if page.extract_text())
-        text = preprocess_text(text)
-        documents = [LangChainDocument(page_content=text, metadata={"source": original_filename})]
-    elif file_type == "docx":
-        doc = Document(temp_file)
-        text = " ".join(para.text for para in doc.paragraphs if para.text.strip())  # Join paragraphs with space
-        text = preprocess_text(text)
-        documents = [LangChainDocument(page_content=text, metadata={"source": original_filename})]
-    elif file_type == "xlsx":
-        df = pd.read_excel(temp_file)
-        text = " ".join(df.astype(str).agg(' '.join, axis=1))  # Convert to string and join rows with space
-        text = preprocess_text(text)
-        documents = [LangChainDocument(page_content=text, metadata={"source": original_filename})]
-    
-    os.remove(temp_file)
-    return documents
+            # Keep original text case for better matching
+            doc.metadata["source"] = original_filename
+            doc.metadata["file_type"] = file_type
+            # Add a unique id for each chunk to aid in traceability
+            doc.metadata["chunk_id"] = f"{original_filename}_{id(doc)}"
+        
+        os.remove(temp_file)
+        return documents
+    except Exception as e:
+        os.remove(temp_file)
+        raise e
 
 # Process uploaded files
 if uploaded_files:
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    # Use a more semantic chunking strategy
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,  # Larger chunks to maintain more context
+        chunk_overlap=200,  # Substantial overlap to avoid losing context at boundaries
+        separators=["\n\n", "\n", ". ", " ", ""],  # Respect paragraph and sentence boundaries
+        length_function=len
+    )
     
     for uploaded_file in uploaded_files:
         if uploaded_file.name not in st.session_state.processed_files:
             try:
-                file_type = uploaded_file.name.split(".")[-1].lower()
-                documents = process_file(uploaded_file, file_type)
+                documents = process_file(uploaded_file)
                 chunks = text_splitter.split_documents(documents)
-                for chunk in chunks:
-                    chunk.metadata = {"source": uploaded_file.name}
-
+                
                 if st.session_state.vector_store is None:
                     st.session_state.vector_store = Chroma.from_documents(
                         documents=chunks,
@@ -144,9 +153,14 @@ if submit_button and question:
     if st.session_state.vector_store:
         llm = OllamaLLM(model="llama3")
         
+        # Use MMR retrieval for more diverse and relevant results
         retriever = st.session_state.vector_store.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 5}
+            search_type="mmr",  # Maximum Marginal Relevance for diversity
+            search_kwargs={
+                "k": 8,  # Retrieve more documents for better coverage
+                "fetch_k": 20,  # Consider more candidates for diversity
+                "lambda_mult": 0.7  # Balance between relevance and diversity
+            }
         )
 
         # Debug retrieved documents
@@ -157,84 +171,124 @@ if submit_button and question:
             st.write("Retrieved Documents:")
             for i, doc in enumerate(retrieved_docs):
                 source = doc.metadata.get("source", "Unknown")
-                st.write(f"Doc {i+1} from '{source}': {doc.page_content[:200]}...")
+                chunk_id = doc.metadata.get("chunk_id", "Unknown ID")
+                st.write(f"Doc {i+1} from '{source}' (ID: {chunk_id}): {doc.page_content[:200]}...")
 
-        # Prompt for stuffing all documents
+        # Enhance prompt with clear source attribution requirements
         prompt = PromptTemplate(
             input_variables=["context", "question"],
             template=(
                 "You are a precise assistant answering based solely on the provided document content. "
-                "Extract the answer directly from the context below. If the context doesn’t contain the answer, respond only with 'Unable to answer based on documents.'\n\n"
-                "Context: {context}\n\n"
+                "Extract the answer directly from the context below. If the context doesn't contain the answer, respond only with 'Unable to answer based on documents.'\n\n"
+                "Context:\n{context}\n\n"
                 "Question: {question}\n\n"
-                "Answer:"
+                "Answer with specific reference to the source documents. When quoting information, clearly indicate which specific document it came from. "
+                "Use the format 'According to [document name]' when directly citing information. "
+                "If multiple documents contain similar information, mention all relevant sources."
             )
         )
 
-        # QA chain with stuff
+        # Implement document tracking for better attribution
+        def format_docs_with_sources(docs: List[LangChainDocument]) -> str:
+            """Format documents with clear source markers for better attribution."""
+            formatted_docs = []
+            for i, doc in enumerate(docs):
+                source = doc.metadata.get("source", "Unknown")
+                chunk_id = doc.metadata.get("chunk_id", f"chunk_{i}")
+                
+                # Add source markers that can be traced in the final answer
+                formatted_text = f"[Source: {source} | ID: {chunk_id}]\n{doc.page_content}\n[End of source: {source}]"
+                formatted_docs.append(formatted_text)
+            
+            return "\n\n".join(formatted_docs)
+
+        # Enhanced RAG chain with better source tracking
         try:
-            qa_chain = RetrievalQA.from_chain_type(
-                llm=llm,
-                chain_type="stuff",
-                retriever=retriever,
-                return_source_documents=True,
-                chain_type_kwargs={
-                    "prompt": prompt,
-                    "document_variable_name": "context"
-                }
+            # Use LCEL (LangChain Expression Language) for more flexibility and control
+            rag_chain = (
+                {"context": lambda x: format_docs_with_sources(retriever.invoke(x["query"])), 
+                 "question": lambda x: x["query"]}
+                | prompt
+                | llm
+                | StrOutputParser()
             )
 
             with st.spinner("Generating answer..."):
-                result = qa_chain.invoke({"query": question})
-                answer = result["result"].strip()
-                source_docs = result.get("source_documents", [])
-
-                # Determine contributing sources by matching the exact answer or key phrase
-                contributing_sources = set()
-                normalized_answer = answer.lower().strip()
-                unable_to_answer = "unable to answer based on documents" in normalized_answer
-                core_answer = None  # Initialize core_answer outside the if block
-
-                if not unable_to_answer:
-                    # Extract the core answer by removing preamble and quotes
-                    core_answer_match = re.search(r'["“](.*?)["”]$', normalized_answer)
-                    core_answer = core_answer_match.group(1) if core_answer_match else normalized_answer
-                    core_answer = re.sub(r'^according to.*?:\s*', '', core_answer).strip()
-
-                    # Debug the extracted core answer and document contents
-                    with st.expander("Source Matching Debug"):
-                        st.write(f"Core Answer to Match: '{core_answer}'")
-                        for i, doc in enumerate(source_docs):
-                            st.write(f"Doc {i+1} Content (first 200 chars): '{doc.page_content[:200]}...'")
-                            st.write(f"Doc {i+1} Source: '{doc.metadata.get('source', 'Unknown')}'")
-
-                    # Look for the core answer in each document
-                    for doc in source_docs:
-                        doc_content = doc.page_content.lower()  # Already normalized in preprocess_text
-                        if core_answer in doc_content:
-                            contributing_sources.add(doc.metadata.get("source", "Unknown"))
-
-                    # If no exact match, use significant keywords as fallback
+                answer = rag_chain.invoke({"query": question})
+                
+                # Extract source references from the answer
+                source_pattern = r"according to [\[\(]?([^\]\)\[:]+)[\]\)]?"
+                mentioned_sources = re.findall(source_pattern, answer.lower())
+                
+                # Enhance source detection with more sophisticated pattern matching
+                def extract_contributing_sources(answer: str, docs: List[LangChainDocument]) -> List[str]:
+                    """Extract contributing sources using multiple heuristics."""
+                    contributing_sources = set()
+                    
+                    # Extract directly mentioned sources
+                    source_patterns = [
+                        r"according to [\[\(]?([^\]\)\[:]+)[\]\)]?",
+                        r"from [\[\(]?([^\]\)\[:]+)[\]\)]?",
+                        r"in [\[\(]?([^\]\)\[:]+)[\]\)]?",
+                        r"cited in [\[\(]?([^\]\)\[:]+)[\]\)]?"
+                    ]
+                    
+                    for pattern in source_patterns:
+                        for match in re.finditer(pattern, answer.lower()):
+                            source_mention = match.group(1).strip()
+                            # Find the closest matching actual source
+                            for doc in docs:
+                                doc_source = doc.metadata.get("source", "").lower()
+                                if source_mention in doc_source or doc_source in source_mention:
+                                    contributing_sources.add(doc.metadata.get("source", "Unknown"))
+                    
+                    # If no sources found through explicit mention, use semantic matching
                     if not contributing_sources:
-                        answer_keywords = set(re.split(r'\W+', core_answer)) - set(["the", "is", "of", "in", "a", "an", "according", "to"])
-                        significant_keywords = {kw for kw in answer_keywords if len(kw) > 3}
-                        for doc in source_docs:
-                            doc_content = doc.page_content.lower()
-                            if any(keyword in doc_content for keyword in significant_keywords):
-                                contributing_sources.add(doc.metadata.get("source", "Unknown"))
-
-                # Debug LLM input and output
-                with st.expander("LLM Debug"):
-                    context = "\n".join(doc.page_content for doc in source_docs)
-                    st.write(f"Context passed to LLM:\n{context[:500]}..." if len(context) > 500 else context)
-                    st.write(f"Final Answer: '{answer}'")
-                    st.write(f"Core Answer Extracted: '{core_answer if core_answer else 'N/A'}'")
-                    st.write(f"Contributing Sources: {contributing_sources}")
+                        # Extract key sentences from the answer
+                        answer_sentences = re.split(r'(?<=[.!?])\s+', answer)
+                        for sentence in answer_sentences:
+                            if len(sentence) < 10:  # Skip very short sentences
+                                continue
+                                
+                            # Check if sentence content appears in any document
+                            sentence_lower = sentence.lower()
+                            for doc in docs:
+                                doc_content = doc.page_content.lower()
+                                # Use sliding window for partial matches
+                                words = sentence_lower.split()
+                                for i in range(len(words) - 3):  # At least 4 consecutive words
+                                    phrase = " ".join(words[i:i+4])
+                                    if phrase in doc_content and len(phrase) > 15:  # Significant phrase
+                                        contributing_sources.add(doc.metadata.get("source", "Unknown"))
+                    
+                    return list(contributing_sources)
+                
+                # Get retrieved documents for source extraction
+                retrieved_docs = retriever.invoke(question)
+                contributing_sources = extract_contributing_sources(answer, retrieved_docs)
+                
+                # Debug source extraction
+                with st.expander("Source Attribution Debug"):
+                    st.write(f"Raw mentioned sources: {mentioned_sources}")
+                    st.write(f"Final contributing sources: {contributing_sources}")
+                    
+                    # Show sentence-level matching
+                    st.write("Sentence-level matching:")
+                    answer_sentences = re.split(r'(?<=[.!?])\s+', answer)
+                    for i, sentence in enumerate(answer_sentences):
+                        if len(sentence) < 10:
+                            continue
+                        st.write(f"Sentence {i+1}: {sentence}")
+                        matching_sources = []
+                        for doc in retrieved_docs:
+                            if any(phrase in doc.page_content.lower() for phrase in [s.lower() for s in sentence.split('.') if len(s) > 15]):
+                                matching_sources.append(doc.metadata.get("source", "Unknown"))
+                        st.write(f"  - Matching sources: {matching_sources}")
 
                 history_entry = {
                     "question": question,
                     "answer": answer,
-                    "sources": list(contributing_sources) if not unable_to_answer else []
+                    "sources": contributing_sources
                 }
 
                 st.session_state.qa_history.append(history_entry)
